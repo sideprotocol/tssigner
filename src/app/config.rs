@@ -40,6 +40,7 @@ pub struct Fee {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct P2P {
+    pub bootstrap_peers: Vec<String>,
     pub local_key: String,
     pub public_key: String,
 }
@@ -128,6 +129,7 @@ impl Config {
             keys: BTreeMap::new(),
             pubkeys: BTreeMap::new(),
             p2p: P2P {
+                bootstrap_peers: vec![],
                 local_key: encoded.clone(),
                 public_key: pubkey,
             },

@@ -5,7 +5,7 @@ use libp2p::gossipsub::Message;
 
 use libp2p::identity::Keypair;
 use libp2p::swarm::SwarmEvent;
-use libp2p::{gossipsub, mdns, noise, tcp, yamux};
+use libp2p::{gossipsub, mdns, noise, tcp, yamux, Multiaddr};
 use tokio::io::AsyncReadExt as _;
 use tokio::time::Instant;
 
@@ -72,6 +72,11 @@ pub async fn execute(cli: &Cli) {
         .expect("swarm behaviour config failed")
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
+
+    conf.p2p.bootstrap_peers.iter().for_each(|peer| {
+        let peer_id = peer.parse::<Multiaddr>().expect("Failed to parse peer id");
+        swarm.dial(peer_id).expect("Failed to dial peer");
+    });
 
     // start libp2p swarm
     // subscribes to topics
