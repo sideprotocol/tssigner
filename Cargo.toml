@@ -20,6 +20,7 @@ bitcoincore-rpc = "0.19.0"
 bitcoincore-zmq = {version="1.5.1", features=["async"]}
 tokio = { version = "1.37.0", features = ["full"] }
 async-trait = "0.1"
+ordinals = "0.0.9"
 
 libp2p = {version = "0.53.2", features = [ "tokio", "gossipsub", "mdns", "noise", "macros", "tcp", "yamux", "quic"] }
 tracing = "0.1.37"
@@ -27,8 +28,8 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 toml = "0.8.14"
 descriptive_toml_derive = "0.1.1"
 document-features = "0.2.7"
-frost-core = { git="https://github.com/liangping/frost.git", branch = "frost-secp256k1-tr", features=["serde", "serialization", "internals"]}
-frost-secp256k1-tr = { git="https://github.com/liangping/frost.git", branch = "frost-secp256k1-tr", features=["serde", "serialization",]}
+frost-core = { git="https://github.com/keithsue/frost.git", branch = "sufay/make-new-pub", features=["serde", "serialization", "internals"]}
+frost-secp256k1-tr = { git="https://github.com/keithsue/frost.git", branch = "sufay/make-new-pub", features=["serde", "serialization",]}
 k256 = { version = "0.13.0", features = ["arithmetic", "expose-field", "hash2curve"] }
 rand_core = "0.6"
 rand_chacha = "0.3.1"
