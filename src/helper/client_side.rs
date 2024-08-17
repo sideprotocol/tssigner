@@ -42,12 +42,24 @@ impl WithdrawRequestsResponse {
 }
 
 pub async fn get_bitcoin_tip_on_side(host: &str ) -> Result<Response<QueryChainTipResponse>, Status> {
-    let mut btc_client = BtcQueryClient::connect(host.to_string()).await.unwrap();
+    let mut btc_client = match BtcQueryClient::connect(host.to_string()).await {
+        Ok(client) => client,
+        Err(e) => {
+            return Err(Status::cancelled(format!("Failed to create btcbridge query client: {}", e)));
+        }
+    };
+
     btc_client.query_chain_tip(QueryChainTipRequest {}).await
 }
 
-pub async fn get_withdraw_requests(host: &str ) -> Result<Response<QueryWithdrawRequestsResponse>, Status> {
-    let mut btc_client = BtcQueryClient::connect(host.to_string()).await.unwrap();
+pub async fn get_withdraw_requests(host: &str) -> Result<Response<QueryWithdrawRequestsResponse>, Status> {
+    let mut btc_client = match BtcQueryClient::connect(host.to_string()).await {
+        Ok(client) => client,
+        Err(e) => {
+            return Err(Status::cancelled(format!("Failed to create btcbridge query client: {}", e)));
+        }
+    };
+
     btc_client.query_withdraw_requests(QueryWithdrawRequestsRequest {
         pagination: None,
         status: 1i32
@@ -55,7 +67,13 @@ pub async fn get_withdraw_requests(host: &str ) -> Result<Response<QueryWithdraw
 }
 
 pub async fn get_withdraw_request_by_txid(host: &str, txid: String) -> Result<Response<QueryWithdrawRequestByTxHashResponse>, Status> {
-    let mut btc_client = BtcQueryClient::connect(host.to_string()).await.unwrap();
+    let mut btc_client = match BtcQueryClient::connect(host.to_string()).await {
+        Ok(client) => client,
+        Err(e) => {
+            return Err(Status::cancelled(format!("Failed to create btcbridge query client: {}", e)));
+        }
+    };
+
     btc_client.query_withdraw_request_by_tx_hash(QueryWithdrawRequestByTxHashRequest {
         txid,
     }).await
@@ -93,9 +111,20 @@ pub async fn send_cosmos_transaction(shuttler: &Shuttler, msg : Any) -> Result<R
     let base_account = shuttler.get_relayer_account().await;
     
 
-    let mut base_client = TendermintServiceClient::connect(conf.side_chain.grpc.to_string()).await.unwrap();
-    let resp_b = base_client.get_latest_block(GetLatestBlockRequest {
-    }).await.unwrap();
+    let mut base_client = match TendermintServiceClient::connect(conf.side_chain.grpc.to_string()).await {
+        Ok(client) => client,
+        Err(e) => {
+            return Err(Status::cancelled(format!("Failed to create tendermint client: {}", e)));
+        }
+    };
+
+    let resp_b = match base_client.get_latest_block(GetLatestBlockRequest {
+    }).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            return Err(Status::cancelled(format!("Failed to get latest block: {}", e)));
+        }
+    };
     
     let chain_id = resp_b.into_inner().block.unwrap().header.unwrap().chain_id.parse().unwrap();
     let account_number = base_account.account_number;
@@ -128,7 +157,13 @@ pub async fn send_cosmos_transaction(shuttler: &Shuttler, msg : Any) -> Result<R
     // Serialize the raw transaction as bytes (i.e. `Vec<u8>`).
     let tx_bytes = tx_signed.to_bytes().unwrap();
 
-    let mut tx_client = TxServiceClient::connect(conf.side_chain.grpc.to_string()).await.unwrap();
+    let mut tx_client = match TxServiceClient::connect(conf.side_chain.grpc.to_string()).await {
+        Ok(client) => client,
+        Err(e) => {
+            return Err(Status::cancelled(format!("Failed to create tx client: {}", e)));
+        }
+    };
+
     tx_client.broadcast_tx(BroadcastTxRequest {
         tx_bytes,
         mode: BroadcastMode::Sync.into(),    

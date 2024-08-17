@@ -13,7 +13,8 @@ use crate::{
 
 use super::{
     bitcoin::{self as bitcoin_utils},
-    client_side::{self, send_cosmos_transaction}, store,
+    client_side::{self, send_cosmos_transaction},
+    store,
 };
 use cosmos_sdk_proto::{
     cosmos::tx::v1beta1::BroadcastTxResponse,
@@ -73,18 +74,34 @@ async fn scan_vault_txs(shuttler: &Shuttler, height: u64) {
         }
     };
 
-    for tx in &block.txdata {
+    for (i, tx) in block.txdata.iter().enumerate() {
+        info!(
+            "Checking tx {:?}, height: {:?}, index: {:?}",
+            tx.compute_txid(),
+            height,
+            i
+        );
+
         if bitcoin_utils::may_be_withdraw_tx(&tx) {
-            match bitcoin_utils::get_tx_proof(
-                &shuttler.bitcoin_client,
-                tx.compute_txid(),
-                &block_hash,
-            ) {
-                Some(proof) => {
-                    send_withdraw_tx(shuttler, &block_hash, &tx, proof).await;
+            info!("Withdrawal tx found...");
+
+            let proof = bitcoin_utils::compute_tx_proof(
+                block.txdata.iter().map(|tx| tx.compute_txid()).collect(),
+                i,
+            );
+
+            match send_withdraw_tx(shuttler, &block_hash, &tx, proof).await {
+                Ok(resp) => {
+                    let tx_response = resp.into_inner().tx_response.unwrap();
+                    if tx_response.code != 0 {
+                        error!("Failed to submit withdrawal tx: {:?}", tx_response);
+                        continue;
+                    }
+
+                    info!("Submitted withdrawal tx: {:?}", tx_response);
                 }
-                None => {
-                    error!("Failed to get tx proof");
+                Err(e) => {
+                    error!("Failed to submit withdrawal tx: {:?}", e);
                 }
             }
 
@@ -92,30 +109,41 @@ async fn scan_vault_txs(shuttler: &Shuttler, height: u64) {
         }
 
         if bitcoin_utils::is_deposit_tx(tx, shuttler.config().bitcoin.network) {
+            info!("Deposit tx found...");
+
+            let proof = bitcoin_utils::compute_tx_proof(
+                block.txdata.iter().map(|tx| tx.compute_txid()).collect(),
+                i,
+            );
+
             let prev_txid = tx.input[0].previous_output.txid;
-            match shuttler
+            let prev_tx = match shuttler
                 .bitcoin_client
-                .get_raw_transaction(&prev_txid, Some(&block_hash))
+                .get_raw_transaction(&prev_txid, None)
             {
-                Ok(prev_tx) => {
-                    match bitcoin_utils::get_tx_proof(
-                        &shuttler.bitcoin_client,
-                        tx.compute_txid(),
-                        &block_hash,
-                    ) {
-                        Some(proof) => {
-                            send_deposit_tx(shuttler, &block_hash, &prev_tx, &tx, proof).await;
-                        }
-                        None => {
-                            error!("Failed to get tx proof");
-                        }
-                    }
-                }
+                Ok(prev_tx) => prev_tx,
                 Err(e) => {
                     error!(
                         "Failed to get the previous tx: {:?}, err: {:?}",
                         prev_txid, e
                     );
+
+                    continue;
+                }
+            };
+
+            match send_deposit_tx(shuttler, &block_hash, &prev_tx, &tx, proof).await {
+                Ok(resp) => {
+                    let tx_response = resp.into_inner().tx_response.unwrap();
+                    if tx_response.code != 0 {
+                        error!("Failed to submit deposit tx: {:?}", tx_response);
+                        continue;
+                    }
+
+                    info!("Submitted deposit tx: {:?}", tx_response);
+                }
+                Err(e) => {
+                    error!("Failed to submit deposit tx: {:?}", e);
                 }
             }
         }

@@ -34,6 +34,8 @@ rand_core = "0.6"
 rand_chacha = "0.3.1"
 sha2 = "0.10.8"
 sha256 = "1.5.0"
+merkle_light = "0.4.0"
+rust-crypto = "0.2.36"
 rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -50,7 +52,6 @@ cosmrs = { git = "https://github.com/sideprotocol/cosmos-rust", branch="main" }
 cosmos-sdk-proto  = { git = "https://github.com/sideprotocol/cosmos-rust", branch="main" }
 # Optional dependencies
 tonic = { version = "0.12.1", features = ["codegen", "prost"] }
-
 
 [dev-dependencies]
 criterion = "0.5"

@@ -53,7 +53,7 @@ async fn fetch_latest_withdraw_requests(
     behave: &mut SigningBehaviour,
     signer: &mut Shuttler,
 ) {
-    let host = signer.config().side_chain.rest_url.as_str();
+    let host = signer.config().side_chain.grpc.as_str();
 
     if cli.mock {
         return;
@@ -93,10 +93,17 @@ async fn fetch_latest_withdraw_requests(
                 let task = Task::new(SigningSteps::SignInit, request.psbt);
                 signer.sign_init(behave, &task);
                 let message = serde_json::to_string(&task).unwrap();
-                behave
+                match behave
                     .gossipsub
                     .publish(task.step.topic(), message.as_bytes())
-                    .expect("Failed to publish message");
+                {
+                    Ok(_) => {
+                        info!("Published sign init message to gossip: {:?}", message);
+                    }
+                    Err(e) => {
+                        error!("Failed to publish sign init message to gossip: {:?}", e);
+                    }
+                }
             }
         }
         Err(e) => {

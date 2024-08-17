@@ -113,10 +113,17 @@ impl Shuttler {
         };
 
         let new_msg = serde_json::to_string(&round1_message).expect("msg not serialized");
-        behave
+        match behave
             .gossipsub
             .publish(SigningSteps::DkgRound1.topic(), new_msg.as_bytes())
-            .expect("msg not published");
+        {
+            Ok(_) => {
+                info!("Published dkg round1 message to gossip: {:?}", new_msg);
+            }
+            Err(e) => {
+                error!("Failed to publish dkg round1 message to gossip: {:?}", e);
+            }
+        }
     }
 
     pub fn dkg_round1(&mut self, msg: &Message) {
@@ -295,7 +302,7 @@ impl Shuttler {
             let hash_ty = input
                 .sighash_type
                 .and_then(|psbt_sighash_type| psbt_sighash_type.taproot_hash_ty().ok())
-                .unwrap_or(bitcoin::TapSighashType::All);
+                .unwrap_or(bitcoin::TapSighashType::Default);
             let hash = match SighashCache::new(&psbt.unsigned_tx).taproot_key_spend_signature_hash(
                 i,
                 &sighash::Prevouts::All(&[TxOut {

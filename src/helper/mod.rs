@@ -3,6 +3,7 @@ pub mod encoding;
 pub mod messages;
 pub mod store;
 pub mod bitcoin;
+pub mod merkle_proof;
 pub mod http;
 pub mod loop_tasks;
 pub mod tick_tasks;

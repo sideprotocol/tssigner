@@ -1,15 +1,13 @@
-use std::u64;
-
 use bitcoin::{
-    key::Secp256k1, opcodes, script::Instruction, transaction::Version, Address, Amount, BlockHash,
-    Network, OutPoint, PublicKey, ScriptBuf, TapNodeHash, Transaction, TxIn, TxOut, Txid,
-    XOnlyPublicKey,
+    key::Secp256k1, opcodes, script::Instruction, Address, BlockHash, Network, PublicKey,
+    ScriptBuf, TapNodeHash, Transaction, Txid, XOnlyPublicKey,
 };
-use bitcoin_hashes::Hash;
 use bitcoincore_rpc::RpcApi;
 use frost_secp256k1_tr::VerifyingKey;
 
 use crate::app::config;
+
+use super::{encoding, merkle_proof};
 
 pub fn get_group_address(verify_key: &VerifyingKey, network: Network) -> Address {
     // let verifying_key_b = json_data.pubkey_package.verifying_key();
@@ -43,23 +41,8 @@ pub fn get_address_from_pk_script(pk_script: ScriptBuf, network: Network) -> Str
     }
 }
 
-// TODO: calculate proof from local
-pub fn get_tx_proof(
-    client: &bitcoincore_rpc::Client,
-    txid: Txid,
-    block_hash: &BlockHash,
-) -> Option<Vec<String>> {
-    match client.get_tx_out_proof(&[txid], Some(&block_hash)) {
-        Ok(proof_bytes) => {
-            let mut proof = Vec::new();
-            proof_bytes
-                .chunks_exact(32)
-                .for_each(|chunk| proof.push(hex::encode(chunk)));
-
-            Some(proof)
-        }
-        _ => None,
-    }
+pub fn compute_tx_proof(txids: Vec<Txid>, index: usize) -> Vec<String> {
+    merkle_proof::compute_tx_proof(txids, index)
 }
 
 pub fn is_deposit_tx(tx: &Transaction, network: Network) -> bool {
@@ -96,34 +79,73 @@ pub fn may_be_withdraw_tx(tx: &Transaction) -> bool {
     return true;
 }
 
-#[test]
-fn test_withdraw_tx_check() {
-    let mut protocol = [0u8; 4];
-    protocol.copy_from_slice("side".as_bytes());
+#[cfg(test)]
+mod tests {
+    use bitcoin::{transaction::Version, Amount, OutPoint, TxIn, TxOut};
+    use bitcoin_hashes::Hash;
 
-    let sequence = u64::MAX;
+    use encoding::from_base64;
 
-    let tx = Transaction {
-        version: Version::TWO,
-        lock_time: bitcoin::absolute::LockTime::ZERO,
-        input: [TxIn {
-            previous_output: OutPoint {
-                txid: Txid::all_zeros(),
-                vout: 0,
-            },
-            ..Default::default()
-        }]
-        .to_vec(),
-        output: [TxOut {
-            value: Amount::from_sat(1000),
-            script_pubkey: ScriptBuf::builder()
-                .push_opcode(opcodes::all::OP_RETURN)
-                .push_slice(protocol)
-                .push_slice(sequence.to_be_bytes())
-                .into_script(),
-        }]
-        .to_vec(),
-    };
+    use super::*;
 
-    assert!(may_be_withdraw_tx(&tx), "may be a withdrawal tx")
+    #[test]
+    fn test_withdraw_tx_check() {
+        let mut protocol = [0u8; 4];
+        protocol.copy_from_slice("side".as_bytes());
+
+        let sequence = u64::MAX;
+
+        let tx = Transaction {
+            version: Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: [TxIn {
+                previous_output: OutPoint {
+                    txid: Txid::all_zeros(),
+                    vout: 0,
+                },
+                ..Default::default()
+            }]
+            .to_vec(),
+            output: [TxOut {
+                value: Amount::from_sat(1000),
+                script_pubkey: ScriptBuf::builder()
+                    .push_opcode(opcodes::all::OP_RETURN)
+                    .push_slice(protocol)
+                    .push_slice(sequence.to_be_bytes())
+                    .into_script(),
+            }]
+            .to_vec(),
+        };
+
+        assert!(may_be_withdraw_tx(&tx), "may be a withdrawal tx")
+    }
+
+    #[test]
+    fn test_tx_proof() {
+        // mainnet block: 80000
+        let mut txid1 =
+            hex::decode("c06fbab289f723c6261d3030ddb6be121f7d2508d77862bb1e484f5cd7f92b25")
+                .unwrap();
+        let mut txid2 =
+            hex::decode("5a4ebf66822b0b2d56bd9dc64ece0bc38ee7844a23ff1d7320a88c5fdb2ad3e2")
+                .unwrap();
+
+        txid1.reverse();
+        txid2.reverse();
+
+        let txids = vec![
+            Txid::from_slice(txid1.as_slice()).unwrap(),
+            Txid::from_slice(txid2.as_slice()).unwrap(),
+        ];
+
+        let proof = compute_tx_proof(txids, 1);
+        assert_eq!(proof.len(), 1);
+
+        let mut branch = from_base64(&proof[0]).unwrap();
+        branch[1..].reverse();
+        assert_eq!(
+            hex::encode(branch),
+            "01c06fbab289f723c6261d3030ddb6be121f7d2508d77862bb1e484f5cd7f92b25"
+        );
+    }
 }
