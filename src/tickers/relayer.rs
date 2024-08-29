@@ -1,4 +1,4 @@
-use std::{sync::Mutex, thread::sleep, time::Duration};
+use std::{sync::Mutex, time::Duration};
 
 use bitcoin::{consensus::encode, BlockHash, Transaction};
 use bitcoincore_rpc::RpcApi;
@@ -7,6 +7,7 @@ use prost_types::Any;
 use rand::Rng;
 use rand_chacha::ChaCha8Rng;
 use tonic::{Response, Status};
+use tokio::time::sleep;
 use tracing::{debug, error, info};
 
 use crate::{
@@ -128,7 +129,7 @@ pub async fn sync_btc_blocks(relayer: &Relayer) {
 
         if tip_on_bitcoin == tip_on_side {
             debug!("No new blocks to sync, sleep for 60 seconds...");
-            sleep(Duration::from_secs(60));
+            sleep(Duration::from_secs(60)).await;
             continue;
         }
 
@@ -229,7 +230,7 @@ pub async fn scan_vault_txs_loop(relayer: &Relayer) {
                 }
             };
         if height > side_tip - 1 {
-            sleep(Duration::from_secs(60));
+            sleep(Duration::from_secs(60)).await;
             continue;
         }
 

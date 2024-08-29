@@ -1,5 +1,3 @@
-
-use std::sync::Mutex;
 use cosmrs::{ tx::{self, Fee, SignDoc, SignerInfo}, Coin};
 use cosmos_sdk_proto::cosmos::{
     base::tendermint::v1beta1::GetLatestBlockRequest, 
@@ -10,6 +8,8 @@ use reqwest::Error;
 use tonic::{Response, Status};
 use cosmos_sdk_proto::side::btcbridge::{query_client::QueryClient as BtcQueryClient, QueryChainTipRequest, QueryChainTipResponse, QueryWithdrawRequestsRequest, QueryWithdrawRequestsResponse, QueryWithdrawRequestByTxHashRequest, QueryWithdrawRequestByTxHashResponse};
 use crate::app::config;
+
+use tokio::sync::Mutex;
 
 use prost_types::Any;
 use lazy_static::lazy_static;
@@ -115,7 +115,7 @@ pub async fn send_cosmos_transaction(conf: &config::Config, msg : Any) -> Result
     // Building transactions //
     ///////////////////////////
 
-    let _l = lock.lock().unwrap();
+    let _l = lock.lock().await;
     let base_account = config::get_relayer_account(conf).await;
     
     let mut base_client = match TendermintServiceClient::connect(conf.side_chain.grpc.to_string()).await {
