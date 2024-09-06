@@ -39,14 +39,14 @@ pub async fn execute(home: &str, relayer: bool, signer: bool) {
                     Ok(resp) => {
                         let tx_response = resp.into_inner().tx_response.unwrap();
                         if tx_response.code != 0 {
-                            error!("Failed to submit transaction to Side chain: {:?}", tx_response);
-                            return
+                            panic!("Failed to submit transaction to Side chain: {:?}", tx_response);
+                            // return
                         }
                         info!("Sent transaction to Side chain: {:?}", tx_response);
                     },
                     Err(e) => {
-                        error!("Failed to send transaction to side chain: {:?}", e);
-                        return
+                        panic!("Failed to send transaction to side chain: {:?}", e);
+                        // return
                     },
                 };
             }
