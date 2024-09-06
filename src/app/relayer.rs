@@ -5,19 +5,19 @@ use tokio::select;
 use crate::{app::config::Config, helper::client_ordinals::OrdinalsClient, tickers::relayer};
 
 use prost_types::Any;
-use std::{sync::mpsc::Sender, time::Duration};
+use std::{sync::mpsc::SyncSender, time::Duration};
 use tracing::info;
 
 #[derive(Debug)]
 pub struct Relayer {
     config: Config,
-    pub sender: Sender<Any>,
+    pub sender: SyncSender<Any>,
     pub bitcoin_client: Client,
     pub ordinals_client: OrdinalsClient,
 }
 
 impl Relayer {
-    pub fn new(conf: Config, sender: Sender<Any>) -> Self {
+    pub fn new(conf: Config, sender: SyncSender<Any>) -> Self {
 
         let bitcoin_client = Client::new(
             &conf.bitcoin.rpc, 
@@ -41,7 +41,7 @@ impl Relayer {
 
 }
 
-pub async fn run_relayer_daemon(conf: Config, sender: std::sync::mpsc::Sender<prost_types::Any>) {
+pub async fn run_relayer_daemon(conf: Config, sender: SyncSender<prost_types::Any>) {
     
     info!("Starting relayer daemon");
 

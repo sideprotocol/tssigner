@@ -28,7 +28,7 @@ use crate::protocols::{TSSBehaviour, TSSBehaviourEvent};
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::str::FromStr;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 use std::sync::Mutex;
 use std::io;
 use std::time::Duration;
@@ -49,7 +49,7 @@ lazy_static! {
 #[derive(Debug)]
 pub struct Signer {
     config: Config,
-    pub sender: Sender<Any>,
+    pub sender: SyncSender<Any>,
     /// Identity key of the signer
     /// This is the private key of sidechain validator that is used to sign messages
     pub identity_key: SecretKey,
@@ -61,7 +61,7 @@ pub struct Signer {
 }
 
 impl Signer {
-    pub fn new(conf: Config, sender: Sender<Any>) -> Self {
+    pub fn new(conf: Config, sender: SyncSender<Any>) -> Self {
 
         // load private key from priv_validator_key_path
         let local_key = match conf.get_validator_key() {
@@ -176,7 +176,7 @@ impl Signer {
 }
 
 
-pub async fn run_signer_daemon(conf: Config, sender: Sender<Any>) {
+pub async fn run_signer_daemon(conf: Config, sender: SyncSender<Any>) {
 
     info!("Starting TSS Signer Daemon");
 

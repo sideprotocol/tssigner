@@ -1,4 +1,4 @@
-use std::{sync::mpsc::{Sender, SendError}, time::Duration};
+use std::{sync::mpsc::SendError, time::Duration};
 
 use bitcoin::{consensus::encode, Address, BlockHash, OutPoint, Transaction};
 use bitcoincore_rpc::RpcApi;

@@ -16,7 +16,7 @@ pub async fn execute(home: &str, relayer: bool, signer: bool) {
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let (sender, receiver) = std::sync::mpsc::channel::<Any>();
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<Any>(10);
     
     if relayer && !signer {
         let conf2 = conf.clone();
