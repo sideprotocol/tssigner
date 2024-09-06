@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Mutex};
 
 use bitcoin::{ sighash::{self, SighashCache}, Address, Psbt, TapSighashType, Witness};
 use bitcoin_hashes::Hash;
@@ -14,7 +14,7 @@ use frost::{Identifier, round1, round2};
 use frost_secp256k1_tr::{self as frost, round1::SigningNonces};
 use crate::{app::{config::{self, get_database_with_name}, signer::Signer}, helper::{client_side::send_cosmos_transaction, encoding::{self, from_base64}, gossip::publish_sign_package, now}};
 
-use super::{Round, TSSBehaviour};
+use super::{dkg::list_tasks, Round, TSSBehaviour};
 use lazy_static::lazy_static;
 
 lazy_static! {
@@ -22,9 +22,9 @@ lazy_static! {
     //     let path = get_database_with_name("sign-variables");
     //     sled::open(path).unwrap()
     // };
-    static ref DB_TASK: sled::Db = {
+    static ref DB_TASK: Mutex<sled::Db> = {
         let path = get_database_with_name("sign-task");
-        sled::open(path).unwrap()
+        Mutex::new(sled::open(path).unwrap())
     };
 }
 
@@ -63,8 +63,8 @@ pub struct SignSession {
 }
 
 pub fn generate_nonce_and_commitments(request: BitcoinWithdrawRequest, signer: &Signer) {
-
-    match DB_TASK.contains_key(request.txid.as_bytes()) {
+    let task_db = DB_TASK.lock().unwrap();
+    match task_db.contains_key(request.txid.as_bytes()) {
         Ok(false) => {
             info!("Fetched a new signing task: {:?}", request);
         }
@@ -408,8 +408,7 @@ pub async fn submit_signatures(psbt: Psbt, signer: &Signer) {
 
 pub async fn collect_tss_packages(swarm: &mut libp2p::Swarm<TSSBehaviour>, signer: &Signer) {
 
-    for item in DB_TASK.iter() {
-        let mut task: SignTask = serde_json::from_slice(&item.unwrap().1).unwrap();
+    for mut task in list_sign_tasks() {
 
         debug!("Collected task: {:?}", task);
         // try to generate signature shares if shares is enough
@@ -462,8 +461,10 @@ pub async fn collect_tss_packages(swarm: &mut libp2p::Swarm<TSSBehaviour>, signe
 // }
 pub fn list_sign_tasks() -> Vec<SignTask> {
     let mut tasks = vec![];
-    debug!("loading in-process sign tasks from database, total: {:?}", DB_TASK.len());
-    for task in DB_TASK.iter() {
+
+    let task_db = DB_TASK.lock().unwrap();
+    debug!("loading in-process sign tasks from database, total: {:?}", task_db.len());
+    for task in task_db.iter() {
         let (_, task) = task.unwrap();
         tasks.push(serde_json::from_slice(&task).unwrap());
     }
@@ -471,7 +472,8 @@ pub fn list_sign_tasks() -> Vec<SignTask> {
 }
 
 fn get_sign_task(id: &str) -> Option<SignTask> {
-    match DB_TASK.get(id) {
+    let task_db = DB_TASK.lock().unwrap();
+    match task_db.get(id) {
         Ok(Some(task)) => {
             let task: SignTask = serde_json::from_slice(&task).unwrap();
             Some(task)
@@ -482,16 +484,20 @@ fn get_sign_task(id: &str) -> Option<SignTask> {
 
 fn save_sign_task(task: &SignTask) {
     let value = serde_json::to_vec(&task).unwrap();
-    DB_TASK.insert(task.id.as_bytes(), value).unwrap();
+    let task_db = DB_TASK.lock().unwrap();
+    task_db.insert(task.id.as_bytes(), value).unwrap();
 }
 
 pub fn delete_tasks() {
-    DB_TASK.clear().unwrap();
-    DB_TASK.flush().unwrap();
+    let task_db = DB_TASK.lock().unwrap();
+    task_db.clear().unwrap();
+    task_db.flush().unwrap();
 }
 
 pub fn remove_task(task_id: &str) {
-    match DB_TASK.remove(task_id) {
+
+    let task_db = DB_TASK.lock().unwrap();
+    match task_db.remove(task_id) {
         Ok(_) => {
             info!("Removed task from database: {}", task_id);
         },

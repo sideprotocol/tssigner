@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, fmt::Debug};
 use cosmos_sdk_proto::side::btcbridge::DkgRequest;
 use ed25519_compact::{x25519, SecretKey};
 use rand::thread_rng;
+use std::sync::Mutex;
 use tracing::{debug, error, info};
 use serde::{Deserialize, Serialize};
 
@@ -21,13 +22,13 @@ use crate::helper::cipher::{decrypt, encrypt};
 use lazy_static::lazy_static;
 
 lazy_static! {
-    static ref DB: sled::Db = {
+    static ref DB: Mutex<sled::Db> = {
         let path = get_database_with_name("dkg-variables");
-        sled::open(path).unwrap()
+        Mutex::new(sled::open(path).unwrap())
     };
-    static ref DB_TASK: sled::Db = {
+    static ref DB_TASK: Mutex<sled::Db> = {
         let path = get_database_with_name("dkg-task");
-        sled::open(path).unwrap()
+        Mutex::new(sled::open(path).unwrap())
     };
 }
 
@@ -80,7 +81,8 @@ pub struct  DKGResponse {
 }
 
 pub fn has_task_preceeded(task_id: &str) -> bool {
-    match DB_TASK.get(task_id) {
+    let task_db = DB_TASK.lock().unwrap();
+    match task_db.get(task_id) {
         Ok(Some(_)) => true,
         _ => false,
     }
@@ -110,7 +112,9 @@ pub fn generate_round1_package(identifier: Identifier, task: &DKGTask) {
         round1_packages.insert(identifier, round1_package);
 
         let value = serde_json::to_vec(&round1_packages).unwrap();
-        match DB.insert(format!("dkg-{}-round1", task.id), value) {
+
+        let var_db = DB.lock().unwrap();
+        match var_db.insert(format!("dkg-{}-round1", task.id), value) {
             Ok(_) => {
                 info!("DKG round 1 completed: {}", task.id);
             }
@@ -167,7 +171,8 @@ pub fn generate_round2_packages(identifier: &Identifier, enc_key: &SecretKey, ta
 
             let value = serde_json::to_vec(&merged).unwrap();
 
-            match DB.insert(format!("dkg-{}-round2", &task_id), value) {
+            let var_db = DB.lock().unwrap();
+            match var_db.insert(format!("dkg-{}-round2", &task_id), value) {
                 Ok(_) => {
                     info!("DKG round 2 completed: {task_id}");
                 }
@@ -197,7 +202,9 @@ pub fn collect_dkg_packages(swarm: &mut libp2p::Swarm<TSSBehaviour>) {
 }
 
 pub fn prepare_response_for_task(task_id: String) -> DKGResponse {
-    let round1_packages = match DB.get(format!("dkg-{}-round1", task_id)) {
+
+    let var_db = DB.lock().unwrap();
+    let round1_packages = match var_db.get(format!("dkg-{}-round1", task_id)) {
         Ok(Some(packets)) => {
             match serde_json::from_slice(&packets) {
                 Ok(packets) => packets,
@@ -212,7 +219,8 @@ pub fn prepare_response_for_task(task_id: String) -> DKGResponse {
             BTreeMap::new()
         },
     };
-    let round2_packages = match DB.get(format!("dkg-{}-round2", task_id)) {
+
+    let round2_packages = match var_db.get(format!("dkg-{}-round2", task_id)) {
         Ok(Some(packets)) => {
             match serde_json::from_slice(&packets) {
                 Ok(packets) => packets,
@@ -298,7 +306,8 @@ pub fn received_round1_packages(task: &mut DKGTask, packets: BTreeMap<Identifier
     //     }
     // };
     // store round 1 packets
-    let mut local = match DB.get(format!("dkg-{}-round1", task.id)) {
+    let var_db = DB.lock().unwrap();
+    let mut local = match var_db.get(format!("dkg-{}-round1", task.id)) {
         Ok(Some(local)) => {
             match serde_json::from_slice(&local) {
                 Ok(local) => local,
@@ -317,7 +326,8 @@ pub fn received_round1_packages(task: &mut DKGTask, packets: BTreeMap<Identifier
     // merge packets with local
     local.extend(packets);
 
-    match DB.insert(format!("dkg-{}-round1", task.id), serde_json::to_vec(&local).unwrap()) {
+    let var_db = DB.lock().unwrap();
+    match var_db.insert(format!("dkg-{}-round1", task.id), serde_json::to_vec(&local).unwrap()) {
         Ok(_) => {
             debug!("Stored DKG Round 1 packets: {}: {} packages", task.id, local.len());
         }
@@ -359,7 +369,8 @@ pub fn received_round2_packages(task: &mut DKGTask, packets: BTreeMap<Identifier
     }
 
     // store round 1 packets
-    let mut local = match DB.get(format!("dkg-{}-round2", task.id)) {
+    let var_db = DB.lock().unwrap();
+    let mut local = match var_db.get(format!("dkg-{}-round2", task.id)) {
         Ok(Some(local)) => {
             match serde_json::from_slice(&local) {
                 Ok(local) => local,
@@ -378,7 +389,9 @@ pub fn received_round2_packages(task: &mut DKGTask, packets: BTreeMap<Identifier
     local.extend(packets);
 
     // store round 2 packets
-    match DB.insert(format!("dkg-{}-round2", task.id), serde_json::to_vec(&local).unwrap()) {
+
+    let var_db = DB.lock().unwrap();
+    match var_db.insert(format!("dkg-{}-round2", task.id), serde_json::to_vec(&local).unwrap()) {
         Ok(_) => {
             debug!("Stored DKG Round 2 packets: {}:  {} packages", task.id, local.len());
         }
@@ -419,7 +432,8 @@ pub fn received_round2_packages(task: &mut DKGTask, packets: BTreeMap<Identifier
             }
         };
 
-        let mut round1_packages = match DB.get(format!("dkg-{}-round1", task.id)) {
+        let var_db = DB.lock().unwrap();
+        let mut round1_packages = match var_db.get(format!("dkg-{}-round1", task.id)) {
             Ok(Some(packets)) => {
                 match serde_json::from_slice(&packets) {
                     Ok(packets) => packets,
@@ -525,11 +539,15 @@ impl fmt::Display for DKGError {
 
 pub fn save_task(task: &DKGTask) {
     let se =  &serde_json::to_string(task).unwrap();
-    DB_TASK.insert(task.id.as_str(), se.as_bytes()).expect("Failed to save task to database");
+
+    let task_db = DB_TASK.lock().unwrap();
+    task_db.insert(task.id.as_str(), se.as_bytes()).expect("Failed to save task to database");
  }
  
  pub fn get_task(task_id: &str) -> Option<DKGTask> {
-     match DB_TASK.get(task_id) {
+
+    let task_db = DB_TASK.lock().unwrap();
+     match task_db.get(task_id) {
          Ok(Some(task)) => {
              Some(serde_json::from_slice(&task).unwrap())
          },
@@ -540,7 +558,9 @@ pub fn save_task(task: &DKGTask) {
  }
 
  pub fn remove_task(task_id: &str) {
-    match DB_TASK.remove(task_id) {
+
+    let task_db = DB_TASK.lock().unwrap();
+    match task_db.remove(task_id) {
         Ok(_) => {
             info!("Removed task from database: {}", task_id);
         },
@@ -553,8 +573,10 @@ pub fn save_task(task: &DKGTask) {
  
  pub fn list_tasks() -> Vec<DKGTask> {
      let mut tasks = vec![];
-     debug!("loading in-process dkg tasks from database, total: {:?}", DB_TASK.len());
-     for task in DB_TASK.iter() {
+
+     let task_db = DB_TASK.lock().unwrap();
+     debug!("loading in-process dkg tasks from database, total: {:?}", task_db.len());
+     for task in task_db.iter() {
          let (_, task) = task.unwrap();
          tasks.push(serde_json::from_slice(&task).unwrap());
      }
@@ -562,8 +584,10 @@ pub fn save_task(task: &DKGTask) {
  }
  
  pub fn delete_tasks() {
-     DB_TASK.clear().unwrap();
-     DB_TASK.flush().unwrap();
-     DB.clear().unwrap();
-     DB.flush().unwrap();
+     let task_db = DB_TASK.lock().unwrap();
+     task_db.clear().unwrap();
+     task_db.flush().unwrap();
+     let var_db = DB.lock().unwrap();
+     var_db.clear().unwrap();
+     var_db.flush().unwrap();
  }
