@@ -2,10 +2,8 @@
 
 use core::fmt;
 use std::{collections::BTreeMap, fmt::Debug};
-use cosmos_sdk_proto::side::btcbridge::{DkgRequest, MsgCompleteDkg};
-use cosmrs::Any;
+use cosmos_sdk_proto::side::btcbridge::DkgRequest;
 use ed25519_compact::{x25519, SecretKey};
-use futures::executor::block_on;
 use rand::thread_rng;
 use tracing::{debug, error, info};
 use serde::{Deserialize, Serialize};
@@ -17,7 +15,7 @@ use frost::{keys, Identifier, Secp256K1Sha256};
 use frost_core::keys::dkg::round1::Package;
 use super::{Round, TSSBehaviour};
 use crate::{app::{config:: get_database_with_name, signer::Signer}, helper::{gossip::publish_dkg_packages, now, mem_store}};
-use crate::helper::{cipher::{decrypt, encrypt}, client_side::send_cosmos_transaction};
+use crate::helper::cipher::{decrypt, encrypt};
 
 
 use lazy_static::lazy_static;

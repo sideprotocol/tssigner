@@ -1,7 +1,6 @@
 
 use frost_core::serde::{Serialize, Deserialize};
 use libp2p::{gossipsub::IdentTopic, Swarm};
-use serde::de;
 use tracing::debug;
 
 use crate::protocols::{dkg::{self, prepare_response_for_task}, sign, TSSBehaviour};

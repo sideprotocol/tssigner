@@ -1,8 +1,10 @@
 
-use tokio::join;
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
-use crate::app::{config::Config, relayer, signer};
+use prost_types::Any;
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
+use tracing::{error, info};
+use crate::{app::{config::Config, relayer, signer}, helper::client_side::send_cosmos_transaction};
+
 
 pub async fn execute(home: &str, relayer: bool, signer: bool) {
     
@@ -14,25 +16,42 @@ pub async fn execute(home: &str, relayer: bool, signer: bool) {
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
+    let (sender, receiver) = std::sync::mpsc::channel::<Any>();
+    
     if relayer && !signer {
-        relayer::run_relayer_daemon(conf).await;
+        let conf2 = conf.clone();
+        tokio::spawn(async move { signer::run_signer_daemon(conf2, sender).await });
     } else if signer && !relayer {
-        signer::run_signer_daemon(conf).await;
+        let conf2 = conf.clone();
+        tokio::spawn(async move { relayer::run_relayer_daemon(conf2, sender).await });
     } else {
         let conf2 = conf.clone();
-        let sign_handler = tokio::spawn(async move { signer::run_signer_daemon(conf).await });
-        let relay_handler = tokio::spawn(async move { relayer::run_relayer_daemon(conf2).await });
-        // Start both signer and relayer as default
-        match join!(sign_handler, relay_handler) {
-            (Ok(_), Ok(_)) => {
-                println!("Signer and Relayer started successfully");
+        let conf3 = conf.clone();
+        let sender2 = sender.clone();
+        tokio::spawn(async move { signer::run_signer_daemon(conf3, sender).await });
+        tokio::spawn(async move { relayer::run_relayer_daemon(conf2, sender2).await });
+    }
+
+    loop {
+        match receiver.recv() {
+            Ok(msg) => {
+                match send_cosmos_transaction(&conf, msg).await {
+                    Ok(resp) => {
+                        let tx_response = resp.into_inner().tx_response.unwrap();
+                        if tx_response.code != 0 {
+                            error!("Failed to submit transaction to Side chain: {:?}", tx_response);
+                            return
+                        }
+                        info!("Sent transaction to Side chain: {:?}", tx_response);
+                    },
+                    Err(e) => {
+                        error!("Failed to send transaction to side chain: {:?}", e);
+                        return
+                    },
+                };
             }
-            (Err(e), _) => {
-                println!("Error starting signer: {:?}", e);
-            }
-            (_, Err(e)) => {
-                println!("Error starting relayer: {:?}", e);
-            }
+            Err(e) => error!("Failed to receive message from channel: {}", e),
         }
     }
+
 }

@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 
-use bitcoin::{key::TapTweak, secp256k1, sighash::{self, SighashCache}, Address, Psbt, TapNodeHash, TapSighashType, Witness};
+use bitcoin::{ sighash::{self, SighashCache}, Address, Psbt, TapSighashType, Witness};
 use bitcoin_hashes::Hash;
 use bitcoincore_rpc::RpcApi;
 use cosmos_sdk_proto::side::btcbridge::{BitcoinWithdrawRequest, MsgSubmitWithdrawSignatures};
 use cosmrs::Any;
 
 use rand::thread_rng;
-use serde::{de, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info};
 
 use frost::{Identifier, round1, round2}; 

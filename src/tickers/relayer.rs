@@ -1,29 +1,20 @@
-use std::time::Duration;
+use std::{sync::mpsc::{Sender, SendError}, time::Duration};
 
 use bitcoin::{consensus::encode, Address, BlockHash, OutPoint, Transaction};
 use bitcoincore_rpc::RpcApi;
 use futures::join;
 use prost_types::Any;
-use rand::Rng;
-use rand_chacha::ChaCha8Rng;
 use tokio::{sync::Mutex, time::sleep};
-use tonic::{Response, Status};
 use tracing::{debug, error, info};
 
 use crate::{
     app::{config::{get_database_with_name, Config}, relayer::Relayer},
     helper::{
-        bitcoin::{self as bitcoin_utils}, client_side::{self, send_cosmos_transaction}, encoding::to_base64, 
+        bitcoin::{self as bitcoin_utils}, client_side, encoding::to_base64, 
     },
 };
 
-use cosmos_sdk_proto::{
-    cosmos::{base::tendermint::v1beta1::{
-        service_client::ServiceClient as TendermintServiceClient, GetLatestValidatorSetRequest,
-        Validator,
-    }, tx::v1beta1::BroadcastTxResponse},
-    side::btcbridge::{BlockHeader, MsgSubmitBlockHeaders, MsgSubmitDepositTransaction, MsgSubmitWithdrawTransaction, QueryParamsRequest},
-};
+use cosmos_sdk_proto::side::btcbridge::{BlockHeader, MsgSubmitBlockHeaders, MsgSubmitDepositTransaction, MsgSubmitWithdrawTransaction, QueryParamsRequest};
 use lazy_static::lazy_static;
 
 #[derive(Debug)]
@@ -47,59 +38,12 @@ lazy_static! {
 /// 1. Sync BTC blocks
 /// 2. Scan vault txs
 /// Only the coordinator will run the tasks, the coordinator is selected randomly from the active validator set
-pub async fn start_relayer_tasks(relayer: &Relayer, _rng: &mut ChaCha8Rng) {
-
-    // fetch latest active validator setx
-    let host = relayer.config().side_chain.grpc.clone();
-    let mut client = match TendermintServiceClient::connect(host.to_owned()).await {
-        Ok(client) => client,
-        Err(e) => {
-            error!("Failed to create tendermint query client: {host} {}", e);
-            return;
-        }
-    };
-    let response = match client.get_latest_validator_set(GetLatestValidatorSetRequest { pagination: None }).await {
-        Ok(response) => response,
-        Err(e) => {
-            error!("Failed to get latest validator set: {:?}", e);
-            return;
-        }
-    };
-
-    let mut validator_set = response.into_inner().validators;
-    validator_set.sort_by(|a, b| a.voting_power.cmp(&b.voting_power));
+pub async fn start_relayer_tasks(relayer: &Relayer) {
     
     join!(
-        sync_btc_blocks(&relayer),
-        scan_vault_txs_loop(&relayer)
+        sync_btc_blocks(relayer),
+        scan_vault_txs_loop(relayer),
     );
-}
-
-fn _is_coordinator(
-    validator_set: &Vec<Validator>,
-    address: String,
-    rng: &mut ChaCha8Rng,
-) -> bool {
-    let len = if validator_set.len() > 21 {
-        21
-    } else {
-        validator_set.len()
-    };
-
-    let index = rng.gen_range(0..len);
-    debug!("generated index: {}", index);
-
-    match validator_set.iter().nth(index) {
-        Some(v) => {
-            debug!("Selected coordinator: {:?}", v);
-            // let b = bech32::decode(&v.address).unwrap().1;
-            // return b == address;
-            v.address == address
-        }
-        None => {
-            return false;
-        }
-    }
 }
 
 pub async fn sync_btc_blocks(relayer: &Relayer) {
@@ -175,31 +119,25 @@ pub async fn sync_btc_blocks(relayer: &Relayer) {
                 ntx: 0u64,
             });
 
-            match send_block_headers(relayer, &block_headers).await {
-                Ok(resp) => {
-                    let tx_response = resp.into_inner().tx_response.unwrap();
-                    if tx_response.code != 0 {
-                        error!("Failed to send block headers: {:?}", tx_response);
-                        return;
-                    }
-                    info!("Sent block headers: {:?}", tx_response);
-                    block_headers = vec![] //reset
+            match send_block_headers(relayer, &block_headers) {
+                Ok(_) => {
+                    debug!("Block headers sent to sending pool, {:?}", block_headers.iter().map(|b| b.height).collect::<Vec<_>>());
                 }
                 Err(e) => {
                     error!("Failed to send block headers: {:?}", e);
-                    return;
                 }
-            };
+            }
+
         }
 
         lock.loading = false;
     }
 }
 
-pub async fn send_block_headers(
+pub fn send_block_headers(
     relayer: &Relayer,
     block_headers: &Vec<BlockHeader>,
-) -> Result<Response<BroadcastTxResponse>, Status> {
+) -> Result<(), SendError<Any>>  {
     let submit_block_msg = MsgSubmitBlockHeaders {
         sender: relayer.config().relayer_bitcoin_address().to_string(),
         block_headers: block_headers.clone(),
@@ -207,7 +145,8 @@ pub async fn send_block_headers(
 
     info!("Submitting block headers: {:?}", submit_block_msg);
     let any_msg = Any::from_msg(&submit_block_msg).unwrap();
-    send_cosmos_transaction(relayer.config(), any_msg).await
+    relayer.sender.send(any_msg)
+    // send_cosmos_transaction(relayer.config(), any_msg).await
 }
 
 pub async fn scan_vault_txs_loop(relayer: &Relayer) {
@@ -306,18 +245,12 @@ pub async fn scan_vault_txs(relayer: &Relayer, height: u64) {
                         i,
                     );
 
-                    match send_withdraw_tx(relayer, &block_hash, &tx, proof).await {
-                        Ok(resp) => {
-                            let tx_response = resp.into_inner().tx_response.unwrap();
-                            if tx_response.code != 0 {
-                                error!("Failed to submit withdrawal tx: {:?}", tx_response);
-                                continue;
-                            }
-        
-                            info!("Submitted withdrawal tx: {:?}", tx_response);
+                    match send_withdraw_tx(relayer, &block_hash, &tx, proof) {
+                        Ok(()) => {
+                            info!("Added withdraw tx to sending pool" );
                         }
                         Err(e) => {
-                            error!("Failed to submit withdrawal tx: {:?}", e);
+                            error!("Failed to add withdrawal tx to the pool: {:?}", e);
                         }
                     }
 
@@ -390,14 +323,8 @@ pub async fn scan_vault_txs(relayer: &Relayer, height: u64) {
             };
 
             match send_deposit_tx(relayer, &block_hash, &prev_tx, &tx, proof).await {
-                Ok(resp) => {
-                    let tx_response = resp.into_inner().tx_response.unwrap();
-                    if tx_response.code != 0 {
-                        error!("Failed to submit deposit tx: {:?}", tx_response);
-                        continue;
-                    }
-
-                    info!("Submitted deposit tx: {:?}", tx_response);
+                Ok(_) => {
+                    debug!("added tx into sending pool: {:?}", tx);
                 }
                 Err(e) => {
                     error!("Failed to submit deposit tx: {:?}", e);
@@ -407,12 +334,12 @@ pub async fn scan_vault_txs(relayer: &Relayer, height: u64) {
     }
 }
 
-pub async fn send_withdraw_tx(
+pub fn send_withdraw_tx(
     relayer: &Relayer,
     block_hash: &BlockHash,
     tx: &Transaction,
     proof: Vec<String>,
-) -> Result<Response<BroadcastTxResponse>, Status> {
+) -> Result<(), SendError<Any>> {
     let msg = MsgSubmitWithdrawTransaction {
         sender: relayer.config().relayer_bitcoin_address().to_string(),
         blockhash: block_hash.to_string(),
@@ -423,7 +350,8 @@ pub async fn send_withdraw_tx(
     info!("Submitting withdrawal tx: {:?}", msg);
 
     let any_msg = Any::from_msg(&msg).unwrap();
-    send_cosmos_transaction(relayer.config(), any_msg).await
+    relayer.sender.send(any_msg)
+    //send_cosmos_transaction(relayer.config(), any_msg).await
 }
 
 pub async fn send_deposit_tx(
@@ -432,7 +360,7 @@ pub async fn send_deposit_tx(
     prev_tx: &Transaction,
     tx: &Transaction,
     proof: Vec<String>,
-) -> Result<Response<BroadcastTxResponse>, Status> {
+) -> Result<(), SendError<Any>> {
     let msg = MsgSubmitDepositTransaction {
         sender: relayer.config().relayer_bitcoin_address(),
         blockhash: block_hash.to_string(),
@@ -444,7 +372,8 @@ pub async fn send_deposit_tx(
     info!("Submitting deposit tx: {:?}", msg);
 
     let any_msg = Any::from_msg(&msg).unwrap();
-    send_cosmos_transaction(&relayer.config(), any_msg).await
+    relayer.sender.send(any_msg)
+    //send_cosmos_transaction(&relayer.config(), any_msg).await
 }
 
 pub(crate) fn get_last_scanned_height(config: &Config) -> u64 {

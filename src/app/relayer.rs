@@ -1,24 +1,23 @@
 
 
-use chrono::{Timelike, Utc};
 use bitcoincore_rpc::{Auth, Client};
-use rand::SeedableRng;
-use rand_chacha::ChaCha8Rng;
-use tokio::{select, time::Instant};
-use crate::{app::config::Config, helper::{client_ordinals::OrdinalsClient, now}, tickers::relayer};
+use tokio::select;
+use crate::{app::config::Config, helper::client_ordinals::OrdinalsClient, tickers::relayer};
 
-use std::time::Duration;
+use prost_types::Any;
+use std::{sync::mpsc::Sender, time::Duration};
 use tracing::info;
 
 #[derive(Debug)]
 pub struct Relayer {
     config: Config,
+    pub sender: Sender<Any>,
     pub bitcoin_client: Client,
     pub ordinals_client: OrdinalsClient,
 }
 
 impl Relayer {
-    pub fn new(conf: Config) -> Self {
+    pub fn new(conf: Config, sender: Sender<Any>) -> Self {
 
         let bitcoin_client = Client::new(
             &conf.bitcoin.rpc, 
@@ -28,6 +27,7 @@ impl Relayer {
         let ordinals_client = OrdinalsClient::new(&conf.ordinals.endpoint);
 
         Self {
+            sender,
             // priv_validator_key: validator_key,
             bitcoin_client,
             ordinals_client,
@@ -41,24 +41,22 @@ impl Relayer {
 
 }
 
-pub async fn run_relayer_daemon(conf: Config) {
+pub async fn run_relayer_daemon(conf: Config, sender: std::sync::mpsc::Sender<prost_types::Any>) {
     
     info!("Starting relayer daemon");
 
-    let relayer = Relayer::new(conf);
+    let relayer = Relayer::new(conf, sender);
 
     // this is to ensure that each node fetches tasks at the same time    
-    let d = 6 as u64;
-    let start = Instant::now() + (Duration::from_secs(d) - Duration::from_secs(now() % d));
-    let mut interval_relayer = tokio::time::interval_at(start, Duration::from_secs(d));
-
-    let seed = Utc::now().minute() as u64;
-    let mut rng = ChaCha8Rng::seed_from_u64(seed );
+    // let d = 6 as u64;
+    // let start = Instant::now() + (Duration::from_secs(d) - Duration::from_secs(now() % d));
+    // let mut interval_relayer = tokio::time::interval_at(start, Duration::from_secs(d));
+    let mut interval_relayer = tokio::time::interval(Duration::from_secs(10));
 
     loop {
         select! {
             _ = interval_relayer.tick() => {
-                relayer::start_relayer_tasks(&relayer, &mut rng).await;
+                relayer::start_relayer_tasks(&relayer).await;
             }
         }
     }

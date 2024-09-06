@@ -14,7 +14,6 @@ use libp2p::kad::store::MemoryStore;
 use libp2p::swarm::dial_opts::PeerCondition;
 use libp2p::swarm::{dial_opts::DialOpts, SwarmEvent};
 use libp2p::{ gossipsub, identify, mdns, noise, tcp, yamux, Multiaddr, PeerId, Swarm};
-use tonic::IntoRequest;
 
 use crate::app::config;
 use crate::app::config::Config;
@@ -29,11 +28,12 @@ use crate::protocols::{TSSBehaviour, TSSBehaviourEvent};
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::str::FromStr;
+use std::sync::mpsc::Sender;
 use std::sync::Mutex;
 use std::io;
 use std::time::Duration;
 use tokio::select;
-
+use prost_types::Any;
 use tracing::{debug, error, info, warn};
 
 use ed25519_compact:: SecretKey;
@@ -49,6 +49,7 @@ lazy_static! {
 #[derive(Debug)]
 pub struct Signer {
     config: Config,
+    pub sender: Sender<Any>,
     /// Identity key of the signer
     /// This is the private key of sidechain validator that is used to sign messages
     pub identity_key: SecretKey,
@@ -60,7 +61,7 @@ pub struct Signer {
 }
 
 impl Signer {
-    pub fn new(conf: Config) -> Self {
+    pub fn new(conf: Config, sender: Sender<Any>) -> Self {
 
         // load private key from priv_validator_key_path
         let local_key = match conf.get_validator_key() {
@@ -81,6 +82,7 @@ impl Signer {
             Auth::UserPass(conf.bitcoin.user.clone(), conf.bitcoin.password.clone()))
             .expect("Could not initial bitcoin RPC client");
         Self {
+            sender,
             identity_key: local_key,
             identifier,
             bitcoin_client,
@@ -174,13 +176,13 @@ impl Signer {
 }
 
 
-pub async fn run_signer_daemon(conf: Config) {
+pub async fn run_signer_daemon(conf: Config, sender: Sender<Any>) {
 
     info!("Starting TSS Signer Daemon");
 
     // load config
     conf.load_validator_key();
-    let signer = Signer::new(conf.clone());
+    let signer = Signer::new(conf.clone(), sender);
 
     let libp2p_keypair = Keypair::from_protobuf_encoding(from_base64(&conf.p2p_keypair).unwrap().as_slice()).unwrap();
     let mut swarm: libp2p::Swarm<TSSBehaviour> = libp2p::SwarmBuilder::with_existing_identity(libp2p_keypair)

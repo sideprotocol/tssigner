@@ -1,11 +1,17 @@
 
-use cosmos_sdk_proto::side::btcbridge::{query_client::QueryClient as BtcQueryClient, BitcoinWithdrawRequest, DkgRequestStatus, MsgCompleteDkg, QueryDkgRequestsRequest};
+use cosmos_sdk_proto::side::btcbridge::{query_client::QueryClient as BtcQueryClient, DkgRequestStatus, MsgCompleteDkg, QueryDkgRequestsRequest};
 use cosmrs::Any;
 use libp2p:: Swarm;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 
-use crate::{app::signer::Signer, helper::client_side::{get_withdraw_requests, send_cosmos_transaction}, protocols::{dkg::{self, collect_dkg_packages, generate_round1_package, list_tasks, save_task, DKGTask}, sign::{self, collect_tss_packages, generate_nonce_and_commitments, list_sign_tasks}, Round, TSSBehaviour}};
+use crate::{
+    app::signer::Signer, 
+    helper::client_side::get_withdraw_requests, 
+    protocols::{dkg::{self, collect_dkg_packages, generate_round1_package, list_tasks, DKGTask}, 
+        sign::{self, collect_tss_packages, generate_nonce_and_commitments, list_sign_tasks}, 
+        Round, TSSBehaviour}
+};
 
 async fn fetch_withdraw_signing_requests(
     _behave: &mut TSSBehaviour,
@@ -95,10 +101,10 @@ pub async fn tss_tasks_fetcher(
     // peers: Vec<&PeerId>,
     // behave: &mut TSSBehaviour,
     swarm : &mut Swarm<TSSBehaviour>,
-    shuttler: &Signer,
+    signer: &Signer,
 ) {
 
-    if shuttler.config().get_validator_key().is_none() {
+    if signer.config().get_validator_key().is_none() {
         return;
     }
 
@@ -112,15 +118,15 @@ pub async fn tss_tasks_fetcher(
     // ===========================
 
     // 1. fetch dkg requests
-    fetch_dkg_requests(shuttler).await;
+    fetch_dkg_requests(signer).await;
     // 2. collect dkg packages
     collect_dkg_packages(swarm);
     // 3. fetch withdraw signing requests
-    fetch_withdraw_signing_requests( swarm.behaviour_mut(), shuttler).await;
+    fetch_withdraw_signing_requests( swarm.behaviour_mut(), signer).await;
     // 4. collect withdraw tss packages
-    collect_tss_packages(swarm, shuttler).await;
+    collect_tss_packages(swarm, signer).await;
     // 5. submit dkg address
-    submit_dkg_address(shuttler).await;
+    submit_dkg_address(signer).await;
 
 
 }
@@ -141,22 +147,23 @@ async fn submit_dkg_address(signer: &Signer) {
         };
 
         let any = Any::from_msg(&cosm_msg).unwrap();
-        match send_cosmos_transaction(signer.config(), any).await {
-            Ok(resp) => {
-                let tx_response = resp.into_inner().tx_response.unwrap();
-                if tx_response.code != 0 {
-                    error!("Failed to send dkg vault: {:?}", tx_response);
-                    task.submitted = true;
-                    save_task(task);
-                    return
-                }
-                info!("Sent dkg vault: {:?}", tx_response);
-            },
-            Err(e) => {
-                error!("Failed to send dkg vault: {:?}", e);
-                return
-            },
-        };
+        let _ = signer.sender.send(any);
+        // match send_cosmos_transaction(signer.config(), any).await {
+        //     Ok(resp) => {
+        //         let tx_response = resp.into_inner().tx_response.unwrap();
+        //         if tx_response.code != 0 {
+        //             error!("Failed to send dkg vault: {:?}", tx_response);
+        //             task.submitted = true;
+        //             save_task(task);
+        //             return
+        //         }
+        //         info!("Sent dkg vault: {:?}", tx_response);
+        //     },
+        //     Err(e) => {
+        //         error!("Failed to send dkg vault: {:?}", e);
+        //         return
+        //     },
+        // };
     };
     
 }
