@@ -50,7 +50,7 @@ pub async fn execute(home: &str, relayer: bool, signer: bool) {
                     },
                 };
             }
-            Err(e) => error!("Failed to receive message from channel: {}", e),
+            Err(e) => panic!("Failed to receive message from channel: {}", e),
         }
     }
 
