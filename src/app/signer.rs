@@ -1,4 +1,3 @@
-
 use bitcoincore_rpc::{Auth, Client};
 use cosmos_sdk_proto::cosmos::auth::v1beta1::query_client::QueryClient as AuthQueryClient;
 use cosmos_sdk_proto::cosmos::auth::v1beta1::{BaseAccount, QueryAccountRequest};
@@ -6,7 +5,7 @@ use frost_core::Field;
 use frost_secp256k1_tr::keys::{KeyPackage, PublicKeyPackage};
 use frost_secp256k1_tr::{self as frost};
 use frost::Identifier;
-use futures::StreamExt;
+use futures::{join, StreamExt};
 
 use libp2p::identity::Keypair;
 use libp2p::kad::store::MemoryStore;
@@ -22,13 +21,13 @@ use crate::helper::cipher::random_bytes;
 use crate::helper::encoding::from_base64;
 use crate::helper::gossip::{subscribe_gossip_topics, SubscribeTopic};
 use crate::protocols::sign::{received_sign_response, SignResponse};
-use crate::tickers::tss::tss_tasks_fetcher;
+use crate::tickers::tss::start_tss_tasks;
 use crate::protocols::dkg::{received_dkg_response, DKGResponse};
 use crate::protocols::{TSSBehaviour, TSSBehaviourEvent};
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::io;
 use std::time::Duration;
 use tokio::select;
@@ -239,9 +238,38 @@ pub async fn run_signer_daemon(conf: Config) {
     dail_bootstrap_nodes(&mut swarm, &conf);
     subscribe_gossip_topics(&mut swarm);
 
-    let mut interval = tokio::time::interval(Duration::from_secs(6));
+    let shared_swarm = Arc::new(tokio::sync::Mutex::new(swarm));
 
+    join!(
+        event_loop(Arc::clone(&shared_swarm), &signer),
+        start_tss_tasks(Arc::clone(&shared_swarm), &signer)
+   );
+}
+
+fn dail_bootstrap_nodes(swarm: &mut Swarm<TSSBehaviour>, conf: &Config) {
+    for addr_text in conf.bootstrap_nodes.iter() {
+        let address = Multiaddr::from_str(addr_text).expect("invalid bootstrap node address");
+        let peer = PeerId::from_str(addr_text.split("/").last().unwrap()).expect("invalid peer id");
+        swarm.behaviour_mut().kad.add_address(&peer, address);
+        debug!("Adding bootstrap node: {:?}", addr_text);
+    }
+    if conf.bootstrap_nodes.len() > 0 {
+        match swarm.behaviour_mut().kad.bootstrap() {
+            Ok(_) => {
+                info!("KAD bootstrap successful");
+            }
+            Err(e) => {
+                warn!("Failed to start KAD bootstrap: {:?}", e);
+            }
+        }
+    }
+}
+
+// event loop to handle all swarm events
+async fn event_loop(shared_swarm: Arc<tokio::sync::Mutex<Swarm<TSSBehaviour>>>, signer: &Signer) {
     loop {
+        let mut swarm = shared_swarm.lock().await;
+
         select! {
             swarm_event = swarm.select_next_some() => match swarm_event {
                 SwarmEvent::Behaviour(evt) => {
@@ -264,30 +292,6 @@ pub async fn run_signer_daemon(conf: Config) {
                 _ => {
                     // debug!("Swarm event: {:?}", swarm_event);
                 },
-            },
-
-            _ = interval.tick() => {
-                tss_tasks_fetcher(&mut swarm, &signer).await;
-            }
-
-        }
-    }
-}
-
-fn dail_bootstrap_nodes(swarm: &mut Swarm<TSSBehaviour>, conf: &Config) {
-    for addr_text in conf.bootstrap_nodes.iter() {
-        let address = Multiaddr::from_str(addr_text).expect("invalid bootstrap node address");
-        let peer = PeerId::from_str(addr_text.split("/").last().unwrap()).expect("invalid peer id");
-        swarm.behaviour_mut().kad.add_address(&peer, address);
-        debug!("Adding bootstrap node: {:?}", addr_text);
-    }
-    if conf.bootstrap_nodes.len() > 0 {
-        match swarm.behaviour_mut().kad.bootstrap() {
-            Ok(_) => {
-                info!("KAD bootstrap successful");
-            }
-            Err(e) => {
-                warn!("Failed to start KAD bootstrap: {:?}", e);
             }
         }
     }
@@ -358,4 +362,3 @@ async fn event_handler(event: TSSBehaviourEvent, swarm: &mut Swarm<TSSBehaviour>
         _ => {}
     }
 }
-

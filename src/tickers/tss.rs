@@ -1,9 +1,11 @@
 
+use std::{sync::{Arc, Mutex}, time::Duration};
+
 use cosmos_sdk_proto::side::btcbridge::{query_client::QueryClient as BtcQueryClient, DkgRequestStatus, MsgCompleteDkg, QueryDkgRequestsRequest};
 use cosmrs::Any;
 use libp2p:: Swarm;
 use tracing::{debug, error, info};
-
+use tokio::time::sleep;
 
 use crate::{app::signer::Signer, helper::client_side::{get_signing_requests, send_cosmos_transaction}, protocols::{dkg::{self, collect_dkg_packages, generate_round1_package, list_tasks, save_task, DKGTask}, sign::{self, collect_tss_packages, generate_nonce_and_commitments, list_sign_tasks}, Round, TSSBehaviour}};
 
@@ -91,38 +93,42 @@ async fn fetch_dkg_requests(shuttler: &Signer) {
 }
 
 
-pub async fn tss_tasks_fetcher(
+pub async fn start_tss_tasks(
     // peers: Vec<&PeerId>,
     // behave: &mut TSSBehaviour,
-    swarm : &mut Swarm<TSSBehaviour>,
+    shared_swarm: Arc<tokio::sync::Mutex<Swarm<TSSBehaviour>>>, 
     shuttler: &Signer,
 ) {
+    loop {
+        let mut swarm = shared_swarm.lock().await;
 
-    if shuttler.config().get_validator_key().is_none() {
-        return;
+        if shuttler.config().get_validator_key().is_none() {
+            continue;
+        }
+
+        if swarm.connected_peers().count() == 0 {
+            continue;
+        }
+
+        debug!("Connected peers: {:?}", swarm.connected_peers().collect::<Vec<_>>());
+
+        // ===========================
+        // all participants tasks:
+        // ===========================
+
+        // 1. fetch dkg requests
+        fetch_dkg_requests(shuttler).await;
+        // 2. collect dkg packages
+        collect_dkg_packages(&mut swarm);
+        // 3. fetch signing requests
+        fetch_signing_requests(swarm.behaviour_mut(), shuttler).await;
+        // 4. collect signing requests tss packages
+        collect_tss_packages(&mut swarm, shuttler).await;
+        // 5. submit dkg address
+        submit_dkg_address(shuttler).await;
+
+        sleep(Duration::from_secs(6)).await;
     }
-
-    if swarm.connected_peers().count() == 0 {
-        return;
-    }
-
-    debug!("Connected peers: {:?}", swarm.connected_peers().collect::<Vec<_>>());
-    // ===========================
-    // all participants tasks:
-    // ===========================
-
-    // 1. fetch dkg requests
-    fetch_dkg_requests(shuttler).await;
-    // 2. collect dkg packages
-    collect_dkg_packages(swarm);
-    // 3. fetch signing requests
-    fetch_signing_requests( swarm.behaviour_mut(), shuttler).await;
-    // 4. collect signing requests tss packages
-    collect_tss_packages(swarm, shuttler).await;
-    // 5. submit dkg address
-    submit_dkg_address(shuttler).await;
-
-
 }
 
 async fn submit_dkg_address(signer: &Signer) {
