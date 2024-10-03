@@ -131,9 +131,9 @@ async fn submit_dkg_address(signer: &Signer) {
             continue;
         }
 
-        if task.submitted {
-            continue;
-        }
+        // if task.submitted {
+        //     continue;
+        // }
 
         let task_id = task.id.replace("dkg-", "").parse().unwrap();
         // submit the vault address to sidechain
