@@ -1,6 +1,6 @@
 
 use frost_core::serde::{Serialize, Deserialize};
-use libp2p::{gossipsub::IdentTopic, Swarm};
+use libp2p::{floodsub::Topic as IdentTopic, Swarm};
 
 use crate::protocols::{dkg::{self, prepare_response_for_task}, sign::SignMesage, TSSBehaviour};
 
@@ -22,7 +22,7 @@ pub fn subscribe_gossip_topics(swarm: &mut Swarm<TSSBehaviour>) {
         SubscribeTopic::SIGNING,
     ];
     for topic in topics {
-        swarm.behaviour_mut().gossip.subscribe(&topic.topic()).expect("Failed to subscribe TSS events");
+        swarm.behaviour_mut().gossip.subscribe(topic.topic());
     }
 }
 
@@ -40,12 +40,13 @@ pub fn publish_signing_package(swarm: &mut Swarm<TSSBehaviour>, package: &SignMe
 }
 
 fn publish_message(swarm: &mut Swarm<TSSBehaviour>, topic: SubscribeTopic, message: Vec<u8>) {
-    match swarm.behaviour_mut().gossip.publish(topic.topic(), message) {
-        Ok(_) => (),
-        Err(e) => {
-            tracing::error!("Failed to publish message to topic {:?}: {:?}", topic, e);
-        }
-    }
+    swarm.behaviour_mut().gossip.publish(topic.topic(), message)
+    // match swarm.behaviour_mut().gossip.publish(topic.topic(), message) {
+    //     Ok(_) => (),
+    //     Err(e) => {
+    //         tracing::error!("Failed to publish message to topic {:?}: {:?}", topic, e);
+    //     }
+    // }
 }
 
 

@@ -21,7 +21,7 @@ bitcoincore-rpc = "0.19.0"
 tokio = { version = "1.39.3", features = ["full"] }
 async-trait = "0.1"
 sled = "0.34.7"
-libp2p = {version = "0.54.1", features = [ "tokio", "gossipsub", "identify", "mdns", "noise", "kad", "macros", "tcp", "yamux", "quic", "cbor"] }
+libp2p = {version = "0.54.1", features = [ "tokio", "floodsub", "identify", "mdns", "noise", "kad", "macros", "tcp", "yamux", "quic", "cbor"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 toml = "0.8.14"

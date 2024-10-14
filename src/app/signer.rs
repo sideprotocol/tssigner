@@ -8,19 +8,20 @@ use frost_secp256k1_tr::{self as frost};
 use frost::Identifier;
 use futures::StreamExt;
 
+use libp2p::floodsub::Floodsub;
 use libp2p::identity::Keypair;
 use libp2p::kad::store::MemoryStore;
 
 use libp2p::swarm::dial_opts::PeerCondition;
 use libp2p::swarm::{dial_opts::DialOpts, SwarmEvent};
-use libp2p::{ gossipsub, identify, mdns, noise, tcp, yamux, Multiaddr, PeerId, Swarm};
+use libp2p::{ floodsub, identify, mdns, noise, tcp, yamux, Multiaddr, PeerId, Swarm};
 
 use crate::app::config::{self, TASK_ROUND_WINDOW};
 use crate::app::config::Config;
 use crate::helper::bitcoin::get_group_address_by_tweak;
 use crate::helper::cipher::random_bytes;
 use crate::helper::encoding::from_base64;
-use crate::helper::gossip::{subscribe_gossip_topics, SubscribeTopic};
+use crate::helper::gossip::{self, subscribe_gossip_topics, SubscribeTopic};
 use crate::protocols::sign::{received_sign_message, SignMesage};
 use crate::tickers::tss::{time_aligned_tasks_executor, time_free_tasks_executor};
 use crate::protocols::dkg::{received_dkg_response, DKGResponse};
@@ -197,33 +198,35 @@ pub async fn run_signer_daemon(conf: Config) {
             let mdns =
                 mdns::tokio::Behaviour::new(mdns::Config::default(), key.public().to_peer_id())?;
 
-            // To content-address message, we can take the hash of message and use it as an ID.
-            let message_id_fn = |message: &gossipsub::Message| {
-                let mut s = DefaultHasher::new();
-                message.data.hash(&mut s);
-                gossipsub::MessageId::from(s.finish().to_string())
-            };
+            // // To content-address message, we can take the hash of message and use it as an ID.
+            // let message_id_fn = |message: &gossipsub::Message| {
+            //     let mut s = DefaultHasher::new();
+            //     message.data.hash(&mut s);
+            //     gossipsub::MessageId::from(s.finish().to_string())
+            // };
 
-            // Set a custom gossipsub configuration
-            let gossipsub_config = gossipsub::ConfigBuilder::default()
-                .heartbeat_interval(Duration::from_secs(10)) // This is set to aid debugging by not cluttering the log space
-                .validation_mode(gossipsub::ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message signing)
-                .message_id_fn(message_id_fn) // content-address messages. No two messages of the same content will be propagated.
-                .max_transmit_size(1000000)
-                .build()
-                .map_err(|msg| io::Error::new(io::ErrorKind::Other, msg))?; // Temporary hack because `build` does not return a proper `std::error::Error`.
+            // // Set a custom gossipsub configuration
+            // let gossipsub_config = gossipsub::ConfigBuilder::default()
+            //     .heartbeat_interval(Duration::from_secs(10)) // This is set to aid debugging by not cluttering the log space
+            //     .validation_mode(gossipsub::ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message signing)
+            //     .message_id_fn(message_id_fn) // content-address messages. No two messages of the same content will be propagated.
+            //     .max_transmit_size(1000000)
+            //     .build()
+            //     .map_err(|msg| io::Error::new(io::ErrorKind::Other, msg))?; // Temporary hack because `build` does not return a proper `std::error::Error`.
 
-            // build a gossipsub network behaviour
-            let gossip = gossipsub::Behaviour::new(
-                gossipsub::MessageAuthenticity::Signed(key.clone()),
-                gossipsub_config,
-            )?;
+            // // build a gossipsub network behaviour
+            // let gossip = gossipsub::Behaviour::new(
+            //     gossipsub::MessageAuthenticity::Signed(key.clone()),
+            //     gossipsub_config,
+            // )?;
 
             let identify = identify::Behaviour::new(
                 identify::Config::new("/shuttler/id/1.0.0".to_string(), key.public().clone())
                         .with_push_listen_addr_updates(true)
             );
             let kad = libp2p::kad::Behaviour::new(key.public().to_peer_id(), MemoryStore::new(key.public().to_peer_id()));
+
+            let gossip = Floodsub::new(key.public().to_peer_id());
             
             Ok(TSSBehaviour { mdns, gossip, identify, kad})
         })
@@ -256,7 +259,7 @@ pub async fn run_signer_daemon(conf: Config) {
                     info!("Local node is listening on {address}/p2p/{}", swarm.local_peer_id());
                 },
                 SwarmEvent::ConnectionEstablished { peer_id, num_established, endpoint, ..} => {
-                    swarm.behaviour_mut().gossip.add_explicit_peer(&peer_id);
+                    swarm.behaviour_mut().gossip.add_node_to_partial_view(peer_id);
                     let connected = swarm.connected_peers().map(|p| p.clone()).collect::<Vec<_>>();
                     if connected.len() > 0 {
                         swarm.behaviour_mut().identify.push(connected);
@@ -303,21 +306,21 @@ fn dail_bootstrap_nodes(swarm: &mut Swarm<TSSBehaviour>, conf: &Config) {
 // handle sub events from the swarm
 async fn event_handler(event: TSSBehaviourEvent, swarm: &mut Swarm<TSSBehaviour>, signer: &Signer) {
     match event {
-        TSSBehaviourEvent::Gossip(gossipsub::Event::Message {message, .. }) => {
+        TSSBehaviourEvent::Gossip(floodsub::FloodsubEvent::Message(message)) => {
             // debug!("Received message: {:?}", message);
-            if message.topic == SubscribeTopic::DKG.topic().hash() {
+            if message.topics.contains( &SubscribeTopic::DKG.topic() ) {
                 let response: DKGResponse = serde_json::from_slice(&message.data).expect("Failed to deserialize DKG message");
                 // dkg_event_handler(shuttler, swarm.behaviour_mut(), &propagation_source, dkg_message);
                 // debug!("Gossip Received DKG Response from {propagation_source}: {message_id} {:?}", response);
                 received_dkg_response(response, signer);
-            } else if message.topic == SubscribeTopic::SIGNING.topic().hash() {
+            } else if message.topics.contains( &SubscribeTopic::SIGNING.topic() ) {
                 let msg: SignMesage = serde_json::from_slice(&message.data).expect("Failed to deserialize Sign message");
                 // debug!("Gossip Received TSS Response from {propagation_source}: {message_id} {:?}", msg);
                 received_sign_message(msg);
             }
         }
         TSSBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
-            swarm.behaviour_mut().gossip.add_explicit_peer(&peer_id);
+            swarm.behaviour_mut().gossip.add_node_to_partial_view( peer_id);
             // info!(" @@(Received) Discovered new peer: {peer_id} with info: {connection_id} {:?}", info);
             info.listen_addrs.iter().for_each(|addr| {
                 if !addr.to_string().starts_with("/ip4/127.0.0.1") {
@@ -332,14 +335,14 @@ async fn event_handler(event: TSSBehaviourEvent, swarm: &mut Swarm<TSSBehaviour>
         } 
         TSSBehaviourEvent::Kad(libp2p::kad::Event::RoutingUpdated { peer, is_new_peer, addresses, .. }) => {
             debug!("KAD Routing updated for {peer} {is_new_peer}: {:?}", addresses);
-            if is_new_peer {
-                swarm.behaviour_mut().gossip.add_explicit_peer(&peer);
-            }
+            // if is_new_peer {
+            //     swarm.behaviour_mut().gossip.add_explicit_peer(&peer);
+            // }
         }
         TSSBehaviourEvent::Mdns(mdns::Event::Discovered(list)) => {
             for (peer_id, multiaddr) in list {
                 info!("mDNS discovered a new peer: {peer_id}");
-                swarm.behaviour_mut().gossip.add_explicit_peer(&peer_id);
+                // swarm.behaviour_mut().gossip.add_explicit_peer(&peer_id);
                 if swarm.is_connected(&peer_id) {
                     return;
                 }
